@@ -40,3 +40,7 @@ gradio_outputs/
 ckpts/
 loras/
 loras_i2v/
+
+# pixi environments
+.pixi
+*.egg-info

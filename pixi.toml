@@ -1,0 +1,14 @@
+[workspace]
+authors = ["longred <longredzhong@outlook.com>"]
+channels = ["conda-forge"]
+name = "Wan2GP"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[pypi-options]
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+extra-index-urls = ["https://pypi.mirrors.ustc.edu.cn/simple", "https://pypi.python.org/simple"]
+
+[tasks]
+
+[dependencies]
