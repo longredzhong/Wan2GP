@@ -51,7 +51,7 @@ AUTOSAVE_FILENAME = "queue.zip"
 PROMPT_VARS_MAX = 10
 
 target_mmgp_version = "3.5.1"
-WanGP_version = "7.1"
+WanGP_version = "7.12"
 settings_version = 2.22
 max_source_video_frames = 3000
 prompt_enhancer_image_caption_model, prompt_enhancer_image_caption_processor, prompt_enhancer_llm_model, prompt_enhancer_llm_tokenizer = None, None, None, None
@@ -275,6 +275,10 @@ def process_prompt_and_add_tasks(state, model_choice):
     skip_steps_cache_type= inputs["skip_steps_cache_type"]
     MMAudio_setting = inputs["MMAudio_setting"]
 
+
+    if not model_def.get("lock_inference_steps", False) and model_type in ["ltxv_13B"] and num_inference_steps < 20:
+        gr.Info("The minimum number of steps should be 20") 
+        return
     if skip_steps_cache_type == "mag":
         if model_type in  ["sky_df_1.3B", "sky_df_14B"]:
             gr.Info("Mag Cache is not supported with Diffusion Forcing")
@@ -2143,8 +2147,9 @@ for file_path in models_def_paths:
             existing_settings.update(settings)
         existing_model_def.update(model_def)
     else:
-        models_def[model_type] = model_def
-        models_def[model_type] = init_model_def(model_type, model_def)
+        models_def[model_type] = model_def # partial def
+        model_def= init_model_def(model_type, model_def)
+        models_def[model_type] = model_def # replace with full def
         model_def["settings"] = settings
 
 model_types = models_def.keys()
@@ -4459,7 +4464,7 @@ def generate_video(
                     raise gr.Error(f"invalid keep frames {keep_frames_video_guide}")
                 keep_frames_parsed = keep_frames_parsed[guide_start_frame: guide_end_frame ]
             if ltxv and video_guide != None:
-                preprocess_type = process_map_video_guide.get(filter_letters(video_prompt_type, "PES"), "raw")
+                preprocess_type = process_map_video_guide.get(filter_letters(video_prompt_type, "PED"), "raw")
                 status_info = "Extracting " + processes_names[preprocess_type]
                 send_cmd("progress", [0, get_latest_status(state, status_info)])
                 # start one frame ealier to faciliate latents merging later
@@ -6794,7 +6799,7 @@ def generate_video_tab(update_form = False, state_dict = None, ui_defaults = Non
                                 ("No Control Video", ""),
                                 ("Transfer Human Motion", "PV"),
                                 ("Transfer Depth", "DV"),
-                                ("Transfer Canny Edges (broken ?)", "EV"),
+                                ("Transfer Canny Edges", "EV"),
                                 ("Use LTXV raw format", "V"),
                            ],
                             value=filter_letters(video_prompt_type_value, "PDEV"),

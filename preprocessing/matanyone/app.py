@@ -28,7 +28,9 @@ arg_mask_save = False
 model_loaded = False
 model = None
 matanyone_model = None
-
+model_in_GPU = False
+matanyone_in_GPU = False
+bfloat16_supported = False
 # SAM generator
 class MaskGenerator():
     def __init__(self, sam_checkpoint, device):
@@ -66,7 +68,6 @@ def get_frames_from_image(image_input, image_state):
     Return 
         [[0:nearest_frame], [nearest_frame:], nearest_frame]
     """
-    load_sam()
 
     user_name = time.time()
     frames = [image_input] * 2  # hardcode: mimic a video with 2 frames
@@ -85,7 +86,7 @@ def get_frames_from_image(image_input, image_state):
         }
     image_info = "Image Name: N/A,\nFPS: N/A,\nTotal Frames: {},\nImage Size:{}".format(len(frames), image_size)
     set_image_encoder_patch()
-    torch.cuda.empty_cache()
+    select_SAM()
     model.samcontroler.sam_controler.reset_image() 
     model.samcontroler.sam_controler.set_image(image_state["origin_images"][0])
     torch.cuda.empty_cache()
@@ -108,7 +109,6 @@ def get_frames_from_video(video_input, video_state):
         [[0:nearest_frame], [nearest_frame:], nearest_frame]
     """
 
-    load_sam()
 
     while model == None:
         time.sleep(1)
@@ -168,7 +168,7 @@ def get_frames_from_video(video_input, video_state):
         }
     video_info = "Video Name: {},\nFPS: {},\nTotal Frames: {},\nImage Size:{}".format(video_state["video_name"], round(video_state["fps"], 0), len(frames), image_size)
     set_image_encoder_patch()
-    torch.cuda.empty_cache()    
+    select_SAM()
     model.samcontroler.sam_controler.reset_image() 
     model.samcontroler.sam_controler.set_image(video_state["origin_images"][0])
     torch.cuda.empty_cache()    
@@ -237,18 +237,37 @@ def patched_forward(self, x: torch.Tensor) -> torch.Tensor:
         attn += rel_w[:, :, :, None, :]
         return attn.view(B, q_h * q_w, k_h * k_w)
 
-    def pay_attention(self, x: torch.Tensor) -> torch.Tensor:
+    def pay_attention(self, x: torch.Tensor, split_heads = 1) -> torch.Tensor:
             B, H, W, _ = x.shape
             # qkv with shape (3, B, nHead, H * W, C)
             qkv = self.qkv(x).reshape(B, H * W, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
+
+            if not bfloat16_supported: qkv = qkv.to(torch.float16)
+
             # q, k, v with shape (B * nHead, H * W, C)
             q, k, v = qkv.reshape(3, B * self.num_heads, H * W, -1).unbind(0)
-            attn_mask = None
-            if self.use_rel_pos:
-                attn_mask = get_decomposed_rel_pos(q, self.rel_pos_h, self.rel_pos_w, (H, W), (H, W))
-            x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, scale=self.scale)
+            if split_heads == 1:
+                attn_mask = None
+                if self.use_rel_pos:
+                    attn_mask = get_decomposed_rel_pos(q, self.rel_pos_h.to(q), self.rel_pos_w.to(q), (H, W), (H, W))
+                x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, scale=self.scale)
+            else:
+                chunk_size = self.num_heads // split_heads 
+                x = torch.empty_like(q)
+                q_chunks = torch.split(q, chunk_size)
+                k_chunks = torch.split(k, chunk_size)
+                v_chunks = torch.split(v, chunk_size)
+                x_chunks = torch.split(x, chunk_size)
+                for x_chunk, q_chunk, k_chunk, v_chunk  in zip(x_chunks, q_chunks, k_chunks, v_chunks):
+                    attn_mask = None
+                    if self.use_rel_pos:
+                        attn_mask = get_decomposed_rel_pos(q_chunk, self.rel_pos_h.to(q), self.rel_pos_w.to(q), (H, W), (H, W))
+                    x_chunk[...]  = F.scaled_dot_product_attention(q_chunk, k_chunk, v_chunk, attn_mask=attn_mask, scale=self.scale)
+                del x_chunk, q_chunk, k_chunk, v_chunk
             del q, k, v, attn_mask
             x = x.view(B, self.num_heads, H, W, -1).permute(0, 2, 3, 1, 4).reshape(B, H, W, -1)
+            if not bfloat16_supported: x = x.to(torch.bfloat16)
+
             return self.proj(x)
 
     shortcut = x
@@ -257,8 +276,17 @@ def patched_forward(self, x: torch.Tensor) -> torch.Tensor:
     if self.window_size > 0:
         H, W = x.shape[1], x.shape[2]
         x, pad_hw = window_partition(x, self.window_size)
+    x_shape = x.shape
 
-    x = pay_attention(self.attn,x)
+    if x_shape[0] > 10:
+        chunk_size = int(x.shape[0]/4) + 1
+        x_chunks = torch.split(x, chunk_size)
+        for i, x_chunk  in enumerate(x_chunks):
+            x_chunk[...] = pay_attention(self.attn,x_chunk)  
+    else:
+        x = pay_attention(self.attn,x, 4)
+
+
     # Reverse window partition
     if self.window_size > 0:
         x = window_unpartition(x, self.window_size, pad_hw, (H, W))
@@ -270,7 +298,7 @@ def patched_forward(self, x: torch.Tensor) -> torch.Tensor:
     return x
 
 def set_image_encoder_patch():
-    if not hasattr(image_encoder_block, "patched"):
+    if not hasattr(image_encoder_block, "patched"):  #and False
         image_encoder_block.forward = patched_forward
         image_encoder_block.patched = True
 
@@ -289,11 +317,12 @@ def sam_refine(video_state, point_prompt, click_state, interactive_state, evt:gr
         coordinate = "[[{},{},0]]".format(evt.index[0], evt.index[1])
         interactive_state["negative_click_times"] += 1
 
-    torch.cuda.empty_cache()    
+    select_SAM()
     # prompt for sam model
     set_image_encoder_patch()
     model.samcontroler.sam_controler.reset_image()
     model.samcontroler.sam_controler.set_image(video_state["origin_images"][video_state["select_frame_number"]])
+    torch.cuda.empty_cache()
     prompt = get_prompt(click_state=click_state, click_input=coordinate)
 
     mask, logit, painted_image = model.first_frame_click( 
@@ -387,7 +416,7 @@ def image_matting(video_state, interactive_state, mask_dropdown, erode_kernel_si
     # operation error
     if len(np.unique(template_mask))==1:
         template_mask[0][0]=1
-    torch.cuda.empty_cache()    
+    select_matanyone()
     foreground, alpha = matanyone(matanyone_processor, following_frames, template_mask*255, r_erode=erode_kernel_size, r_dilate=dilate_kernel_size, n_warmup=refine_iter)
     torch.cuda.empty_cache()    
 
@@ -452,19 +481,25 @@ def video_matting(video_state, end_slider, matting_type, interactive_state, mask
     # operation error
     if len(np.unique(template_mask))==1:
         template_mask[0][0]=1
-    torch.cuda.empty_cache()    
+    select_matanyone()
     foreground, alpha = matanyone(matanyone_processor, following_frames, template_mask*255, r_erode=erode_kernel_size, r_dilate=dilate_kernel_size)
     torch.cuda.empty_cache()    
     output_frames = []
     foreground_mat = matting_type == "Foreground"
+    new_alpha = []
     if not foreground_mat:
-        new_alpha = []
         for frame_alpha in alpha:
             frame_temp = frame_alpha.copy()
             frame_alpha[frame_temp > 127] = 0
             frame_alpha[frame_temp <= 127] = 255
             new_alpha.append(frame_alpha)
-        alpha = new_alpha
+    else:
+        for frame_alpha in alpha:
+            frame_alpha[frame_alpha > 127] = 255
+            frame_alpha[frame_alpha <= 127] = 0
+            new_alpha.append(frame_alpha)
+    alpha = new_alpha
+
     # for frame_origin, frame_alpha in zip(following_frames, alpha):
     #     if foreground_mat:
     #         frame_alpha[frame_alpha > 127] = 255
@@ -572,21 +607,42 @@ def restart():
         gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), \
         gr.update(visible=False), gr.update(visible=False, choices=[], value=[]), "", gr.update(visible=False)
 
-def load_sam():
-    global model_loaded
-    global model
-    global matanyone_model 
-    model.samcontroler.sam_controler.model.to(arg_device)
+# def load_sam():
+#     global model_loaded
+#     global model
+#     model.samcontroler.sam_controler.model.to(arg_device)
+
+#     global matanyone_model 
+#     matanyone_model.to(arg_device)
+
+
+def select_matanyone():
+    global matanyone_in_GPU, model_in_GPU 
+    if matanyone_in_GPU: return
+    model.samcontroler.sam_controler.model.to("cpu")
+    model_in_GPU = False
+    torch.cuda.empty_cache()
     matanyone_model.to(arg_device)
+    matanyone_in_GPU = True
+
+def select_SAM():
+    global matanyone_in_GPU, model_in_GPU 
+    if model_in_GPU: return
+    matanyone_model.to("cpu")
+    matanyone_in_GPU = False
+    torch.cuda.empty_cache()
+    model.samcontroler.sam_controler.model.to(arg_device)
+    model_in_GPU = True
 
 def load_unload_models(selected):
     global model_loaded
     global model
-    global matanyone_model 
+    global matanyone_model, matanyone_processor, matanyone_in_GPU , model_in_GPU, bfloat16_supported
     if selected:
         # print("Matanyone Tab Selected")
         if model_loaded:
-            load_sam()
+            pass
+            # load_sam()
         else:
             # args, defined in track_anything.py
             sam_checkpoint_url_dict = {
@@ -604,21 +660,33 @@ def load_unload_models(selected):
             transfer_stream = torch.cuda.Stream()
             with torch.cuda.stream(transfer_stream):
                 # initialize sams
-                model = MaskGenerator(sam_checkpoint, arg_device)
+                major, minor = torch.cuda.get_device_capability(arg_device)
+                if  major < 8:
+                    bfloat16_supported = False
+                else:
+                    bfloat16_supported = True
+
+                model = MaskGenerator(sam_checkpoint, "cpu")
+                model.samcontroler.sam_controler.model.to("cpu").to(torch.bfloat16).to(arg_device)
+                model_in_GPU = True
                 from .matanyone.model.matanyone import MatAnyone
                 matanyone_model = MatAnyone.from_pretrained("PeiqingYang/MatAnyone")
                 # pipe ={"mat" : matanyone_model, "sam" :model.samcontroler.sam_controler.model }
                 # offload.profile(pipe)
-                matanyone_model = matanyone_model.to(arg_device).eval()
+                matanyone_model = matanyone_model.to("cpu").eval()
+                matanyone_in_GPU = False
                 matanyone_processor = InferenceCore(matanyone_model, cfg=matanyone_model.cfg)
             model_loaded  = True
     else:
         # print("Matanyone Tab UnSelected")
         import gc
-        model.samcontroler.sam_controler.model.to("cpu")
-        matanyone_model.to("cpu")
+        # model.samcontroler.sam_controler.model.to("cpu")
+        # matanyone_model.to("cpu")
+        model = matanyone_model = matanyone_processor = None
+        matanyone_in_GPU = model_in_GPU = False
         gc.collect()
         torch.cuda.empty_cache()
+        model_loaded = False
 
 
 def get_vmc_event_handler():
@@ -663,10 +731,11 @@ def display(tabs, tab_state, model_choice, vace_video_input, vace_image_input, v
 
     # download assets
 
-    gr.Markdown("<B>Mast Edition is provided by MatAnyone</B>")
+    gr.Markdown("<B>Mast Edition is provided by MatAnyone and VRAM optimized by DeepBeepMeep</B>")
     gr.Markdown("If you have some trouble creating the perfect mask, be aware of these tips:")
     gr.Markdown("- Using the Matanyone Settings you can also define Negative Point Prompts to remove parts of the current selection.")
     gr.Markdown("- Sometime it is very hard to fit everything you want in a single mask, it may be much easier to combine multiple independent sub Masks before producing the Matting : each sub Mask is created by selecting an  area of an image and by clicking the Add Mask button. Sub masks can then be enabled / disabled in the Matanyone settings.")
+    gr.Markdown("The Mask Generation time and the VRAM consumed are proportional to the number of frames and the resolution. So if relevant, you may reduce the number of frames in the Matanyone Settings. You will need for the moment to resize yourself the video if needed.")
     
     with gr.Column( visible=True):
         with gr.Row():

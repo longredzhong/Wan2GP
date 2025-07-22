@@ -20,7 +20,7 @@ WanGP supports the Wan (and derived models), Hunyuan Video and LTV Video models 
 **Follow DeepBeepMeep on Twitter/X to get the Latest News**: https://x.com/deepbeepmeep
 
 ## 🔥 Latest Updates
-### July 21 2025: WanGP v7.1 
+### July 21 2025: WanGP v7.12
 - Flux Family Reunion : *Flux Dev* and *Flux Schnell* have been invited aboard WanGP. To celebrate that, Loras support for the Flux *diffusers* format has also been added.
 
 - LTX Video upgraded to version 0.9.8: you can now generate 1800 frames (1 min of video !) in one go without a sliding window. With the distilled model it will take only 5 minutes with a RTX 4090 (you will need 22 GB of VRAM though). I have added options to select higher humber frames if you want to experiment
@@ -30,9 +30,9 @@ WanGP supports the Wan (and derived models), Hunyuan Video and LTV Video models 
 - LTX IC-Lora support: these are special Loras that consumes a conditional image or video
 Beside the pose, depth and canny IC-Loras transparently loaded there is the *detailer* (https://huggingface.co/Lightricks/LTX-Video-ICLoRA-detailer-13b-0.9.8) which is basically an upsampler. Add the *detailer* as a Lora and use LTX Raw Format as control net choice to use it.
 
-And Also:
-- easier way to select video resolution 
-- started to optimize Matanyone to reduce VRAM requirements
+- Matanyone is now also for the GPU Poor as its VRAM requirements have been divided by 2! (7.12 shadow update)
+
+- Easier way to select video resolution 
 
 
 ### July 15 2025: WanGP v7.0 is an AI Powered Photoshop
