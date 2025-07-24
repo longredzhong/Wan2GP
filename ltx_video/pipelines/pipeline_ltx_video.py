@@ -1412,7 +1412,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         sigmoid_term = torch.sigmoid(4.0 * scale_factor * (abs_latents - 1.0))
         # DeepBeepMeep special touch to allow a smooth transition with tone mapping
         if start > 0:
-            gradient_tensor = torch.linspace(0, 1, latents.shape[2])
+            gradient_tensor = torch.linspace(0, 1, latents.shape[2],dtype= sigmoid_term.dtype, device=sigmoid_term.device)
             gradient_tensor = gradient_tensor ** 0.5
             gradient_tensor = gradient_tensor[ None, None, :, None, None ]
             sigmoid_term *= gradient_tensor

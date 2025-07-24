@@ -13,7 +13,7 @@
     },
 	"prompt": "add a hat",
     "resolution": "1280x720",
-    "video_length": 1
+    "batch_size": 1
 }
 
 	
