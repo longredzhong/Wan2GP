@@ -314,7 +314,7 @@ class ConfigManager:
         with open(config_file, "w", encoding="utf-8") as f:
             json.dump(config_dict, f, indent=2, ensure_ascii=False)
     
-    def create_sample_configs(self, output_dir: str = "configs"):
+    def create_sample_configs(self, output_dir: str = "tasks/configs"):
         """创建示例配置文件"""
         output_path = Path(output_dir)
         output_path.mkdir(exist_ok=True)
