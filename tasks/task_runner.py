@@ -33,14 +33,15 @@ class CLITaskRunner:
             model_type=task_config.model_type,
             device="cuda",  # 暂时硬编码
             dtype="bfloat16",
+            quantization=getattr(task_config, "quantization", "none"),
+            text_encoder_quantization=getattr(
+                task_config, "text_encoder_quantization", "none"
+            ),
+            save_quantized=getattr(task_config, "save_quantized", False),
         )
         pipeline._interrupt = False  # type: ignore
         # 准备生成参数
         gen_params = task_config.get_generation_params()
-
-        # 修正：确保为 WanAny2V 使用正确的 'input_prompt' 参数
-        if "prompt" in gen_params:
-            gen_params["input_prompt"] = gen_params.pop("prompt")
 
         # 设置随机种子
         if gen_params.get("seed") is not None:
@@ -54,11 +55,23 @@ class CLITaskRunner:
         try:
             # 创建进度跟踪器
             progress_tracker = ProgressTracker(
-                total_steps=gen_params["num_inference_steps"], logger=logger
+                total_steps=gen_params["sampling_steps"], logger=logger  # 使用 sampling_steps
             )
-            gen_params["callback"] = lambda step, t, latents: progress_tracker.update(
-                step
-            )
+            
+            # 创建兼容 WanGP 原版的回调函数
+            def callback(step, t=None, latents=None, force_refresh=False, read_state=False, override_num_inference_steps=-1, pass_no=-1, **kwargs):
+                """兼容 WanGP 原版的回调函数，支持所有可能的参数"""
+                # 如果是更新总步数的回调（step = -1）
+                if step == -1 and override_num_inference_steps > 0:
+                    progress_tracker.total_steps = override_num_inference_steps
+                    logger.info(f"更新总步数为: {override_num_inference_steps}")
+                    return
+                
+                # 如果是正常的进度回调（step >= 0）
+                if step >= 0:
+                    progress_tracker.update(step)
+            
+            gen_params["callback"] = callback
 
             # 执行生成
             progress_tracker.start()

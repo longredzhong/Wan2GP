@@ -116,14 +116,15 @@ class TaskConfig:
     def get_generation_params(self) -> Dict[str, Any]:
         """获取生成参数字典"""
         params = {
-            "prompt": self.prompt,
-            "negative_prompt": self.negative_prompt,
-            "num_inference_steps": self.steps,
-            "guidance_scale": self.guidance_scale,
+            "input_prompt": self.prompt,  # WanAny2V 使用 input_prompt 而不是 prompt
+            "n_prompt": self.negative_prompt,  # WanAny2V 使用 n_prompt 而不是 negative_prompt
+            "sampling_steps": self.steps,  # WanAny2V 使用 sampling_steps 而不是 num_inference_steps
+            "guide_scale": self.guidance_scale,  # WanAny2V 使用 guide_scale 而不是 guidance_scale
             "width": self.width,
             "height": self.height,
-            "num_frames": self.video_length,
+            "frame_num": self.video_length,  # WanAny2V 使用 frame_num 而不是 num_frames
             "fps": self.fps,
+            "sample_solver": "euler",  # 使用 euler solver 确保步数一致
         }
         
         if self.seed is not None:

@@ -54,6 +54,25 @@ def main():
         default="bfloat16",
         help="Data type (bfloat16/float16/float32)",
     )
+    parser.add_argument(
+        "--quantization",
+        type=str,
+        default="none",
+        choices=["none", "int8", "fp8"],
+        help="Model quantization type (default: none). Use 'int8' or 'fp8' to enable.",
+    )
+    parser.add_argument(
+        "--text-encoder-quantization",
+        type=str,
+        default="none",
+        choices=["none", "int8"],
+        help="Text encoder quantization type (default: none). Use 'int8' to enable.",
+    )
+    parser.add_argument(
+        "--save-quantized",
+        action="store_true",
+        help="Save the model after in-memory quantization.",
+    )
 
     # 工具命令
     parser.add_argument(
@@ -140,6 +159,9 @@ def main():
                 "fps": args.fps,
                 "output_path": args.output,
                 "seed": args.seed,
+                "quantization": args.quantization,
+                "text_encoder_quantization": args.text_encoder_quantization,
+                "save_quantized": args.save_quantized,
             }
             task_config = TaskConfig.from_dict(config_dict)
             result_path = runner.execute_task(task_config)

@@ -44,6 +44,10 @@ def expand_slist(slist, num_inference_steps ):
     return new_slist
 
 def update_loras_slists(trans, slists, num_inference_steps ):
+    # 如果 slists 为 None，直接返回
+    if slists is None:
+        return
+    
     from mmgp import offload
     slists = [ expand_slist(slist, num_inference_steps ) if isinstance(slist, list) else slist for slist in slists ]
     nos = [str(l) for l in range(len(slists))]
